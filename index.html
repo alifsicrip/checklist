@@ -602,15 +602,29 @@ import {
 /* ╔══════════════════════════════════════════╗
    ║   ⚠️  REMPLACEZ PAR VOTRE CONFIG FIREBASE ║
    ╚══════════════════════════════════════════╝ */
+
 const firebaseConfig = {
-  apiKey:            "VOTRE_API_KEY",
-  authDomain:        "VOTRE_PROJECT.firebaseapp.com",
-  projectId:         "VOTRE_PROJECT_ID",
-  storageBucket:     "VOTRE_PROJECT.appspot.com",
-  messagingSenderId: "VOTRE_SENDER_ID",
-  appId:             "VOTRE_APP_ID"
+  apiKey: "AIzaSyCXxzC-d97eNu4wJMaItlO1m-l8RHiU2d0",
+  authDomain: "checklist-ifsi.firebaseapp.com",
+  projectId: "checklist-ifsi",
+  storageBucket: "checklist-ifsi.firebasestorage.app",
+  messagingSenderId: "170955625331",
+  appId: "1:170955625331:web:3bcfe50f254fea9aa2ab06"
 };
 
+```
+**5. Règle Firestore recommandée** (accès uniquement à son propre compte) :
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /checklist_items/{doc} {
+      allow read, write: if request.auth.uid == resource.data.uid;
+      allow create: if request.auth != null;
+    }
+  }
+}
+   
 // ─── Init Firebase ──────────────────────────────────────────────
 let app, auth, db, currentUser = null;
 let items = [];

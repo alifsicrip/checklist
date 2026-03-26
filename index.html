@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Suivi de Compétences</title>
+
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp }    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, set, onValue, push, remove }
+                                from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    /* ══════════════════════════════════════════════════════════════
+       ⚙  REMPLACE CES VALEURS PAR LES TIENNES
+          Console Firebase → Paramètres du projet → Vos applications → Config
+    ══════════════════════════════════════════════════════════════ */
+    const firebaseConfig = {
+      apiKey:            "VOTRE_API_KEY",
+      authDomain:        "VOTRE_PROJECT.firebaseapp.com",
+      databaseURL:       "https://VOTRE_PROJECT-default-rtdb.firebaseio.com",
+      projectId:         "VOTRE_PROJECT",
+      storageBucket:     "VOTRE_PROJECT.appspot.com",
+      messagingSenderId: "VOTRE_SENDER_ID",
+      appId:             "VOTRE_APP_ID"
+    };
+    /* ══════════════════════════════════════════════════════════════ */
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+
+    const LEVELS = [
+      "non-mobilisé",
+      "observé",
+      "mobilisé 1 fois",
+      "mobilisé 3+ fois",
+      "à améliorer",
+      "acquis"
+    ];
+
+    const LEVEL_META = {
+      "non-mobilisé":    { color: "#6b7280", bg: "#f3f4f6" },
+      "observé":         { color: "#3b82f6", bg: "#eff6ff" },
+      "mobilisé 1 fois": { color: "#10b981", bg: "#ecfdf5" },
+      "mobilisé 3+ fois":{ color: "#f59e0b", bg: "#fffbeb" },
+      "à améliorer":     { color: "#ef4444", bg: "#fef2f2" },
+      "acquis":          { color: "#7c3aed", bg: "#f5f3ff" }
+    };
+
+    let items = {};
+
+    function currentLevel(item) {
+      if (!item.history) return "non-mobilisé";
+      const arr = Object.values(item.history).sort((a,b)=>a.date.localeCompare(b.date));
+      return arr.length ? arr[arr.length-1].level : "non-mobilisé";
+    }
+
+    /* ── checklist ─────────────────────────────────────────────── */
+    function renderChecklist() {
+      const list = document.getElementById("checklist-items");
+      list.innerHTML = "";
+      const entries = Object.entries(items);
+      if (!entries.length) {
+        list.innerHTML = `<p class="empty-state">Aucune compétence — ajoutez-en une ci-dessus.</p>`;
+        return;
+      }
+      entries.forEach(([id, item]) => {
+        const lvl  = currentLevel(item);
+        const meta = LEVEL_META[lvl];
+        const row  = document.createElement("div");
+        row.className = "item-row";
+        row.innerHTML = `
+          <div class="item-label">${item.label}</div>
+          <div class="item-controls">
+            <select class="level-select" data-id="${id}">
+              ${LEVELS.map(l=>`<option value="${l}"${l===lvl?" selected":""}>${l}</option>`).join("")}
+            </select>
+            <span class="level-pill"
+              style="background:${meta.bg};color:${meta.color};border-color:${meta.color}55">${lvl}</span>
+            <button class="btn-del" data-id="${id}" title="Supprimer">✕</button>
+          </div>`;
+        row.querySelector(".level-select").addEventListener("change", e => {
+          push(ref(db, `items/${id}/history`), {
+            date: new Date().toISOString().slice(0,10),
+            level: e.target.value
+          });
+        });
+        row.querySelector(".btn-del").addEventListener("click", () => {
+          if (confirm(`Supprimer « ${item.label} » ?`)) remove(ref(db, `items/${id}`));
+        });
+        list.appendChild(row);
+      });
+    }
+
+    /* ── chart ─────────────────────────────────────────────────── */
+    function renderChart() {
+      const canvas = document.getElementById("prog-chart");
+      if (!canvas) return;
+      const DPR = window.devicePixelRatio || 1;
+      const dispW = canvas.clientWidth;
+      const dispH = canvas.clientHeight;
+      canvas.width  = dispW * DPR;
+      canvas.height = dispH * DPR;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(DPR, DPR);
+
+      const W = dispW, H = dispH;
+      ctx.clearRect(0,0,W,H);
+
+      const PAD = { top:28, right:20, bottom:46, left:148 };
+      const iW = W - PAD.left - PAD.right;
+      const iH = H - PAD.top  - PAD.bottom;
+
+      const start   = new Date("2025-09-01");
+      const end     = new Date("2028-07-31");
+      const totalMs = end - start;
+
+      const toX = ds => PAD.left + ((new Date(ds) - start) / totalMs) * iW;
+      const toY = lv => PAD.top  + iH - (LEVELS.indexOf(lv) / (LEVELS.length-1)) * iH;
+
+      /* zebra rows */
+      LEVELS.forEach((l,i) => {
+        const y0 = toY(LEVELS[Math.min(i+1, LEVELS.length-1)]);
+        const y1 = toY(l);
+        if (i % 2 === 0) {
+          ctx.fillStyle = "#f8fafc";
+          ctx.fillRect(PAD.left, i===LEVELS.length-1 ? PAD.top : y0, iW, y1 - (i===LEVELS.length-1 ? PAD.top : y0));
+        }
+      });
+
+      /* horizontal grid lines + labels */
+      LEVELS.forEach((l) => {
+        const y    = toY(l);
+        const meta = LEVEL_META[l];
+
+        ctx.strokeStyle = meta.color + "33";
+        ctx.lineWidth   = 1;
+        ctx.setLineDash([4,4]);
+        ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left+iW, y); ctx.stroke();
+        ctx.setLineDash([]);
+
+        /* colored bullet */
+        ctx.beginPath(); ctx.arc(PAD.left-26, y, 5, 0, Math.PI*2);
+        ctx.fillStyle = meta.color; ctx.fill();
+
+        /* label */
+        ctx.fillStyle    = "#374151";
+        ctx.font         = `500 11px Inter, sans-serif`;
+        ctx.textAlign    = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillText(l, PAD.left-36, y);
+      });
+
+      /* month ticks */
+      const MOIS = ["jan","fév","mar","avr","mai","jun","jul","aoû","sep","oct","nov","déc"];
+      let d = new Date("2025-09-01");
+      while (d <= end) {
+        const x = toX(d.toISOString().slice(0,10));
+        ctx.strokeStyle = "#e5e7eb"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x, PAD.top); ctx.lineTo(x, PAD.top+iH); ctx.stroke();
+        if (d.getMonth() % 3 === 0) {
+          ctx.fillStyle    = "#9ca3af";
+          ctx.font         = `10px Inter, sans-serif`;
+          ctx.textAlign    = "center";
+          ctx.textBaseline = "top";
+          ctx.fillText(`${MOIS[d.getMonth()]} ${d.getFullYear()}`, x, PAD.top+iH+8);
+        }
+        d.setMonth(d.getMonth()+1);
+      }
+
+      /* today */
+      const todayStr = new Date().toISOString().slice(0,10);
+      if (new Date(todayStr) >= start && new Date(todayStr) <= end) {
+        const tx = toX(todayStr);
+        ctx.strokeStyle = "#ef444488"; ctx.lineWidth = 1.5;
+        ctx.setLineDash([5,3]);
+        ctx.beginPath(); ctx.moveTo(tx, PAD.top-6); ctx.lineTo(tx, PAD.top+iH); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle    = "#ef4444";
+        ctx.font         = `bold 10px Inter, sans-serif`;
+        ctx.textAlign    = "center";
+        ctx.textBaseline = "bottom";
+        ctx.fillText("auj.", tx, PAD.top-7);
+      }
+
+      /* axes */
+      ctx.strokeStyle = "#d1d5db"; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(PAD.left, PAD.top);
+      ctx.lineTo(PAD.left, PAD.top+iH);
+      ctx.lineTo(PAD.left+iW, PAD.top+iH);
+      ctx.stroke();
+
+      /* data lines */
+      const PALETTE = ["#6366f1","#ec4899","#14b8a6","#f97316","#8b5cf6","#0ea5e9","#84cc16","#f43f5e"];
+      let ci = 0;
+      Object.entries(items).forEach(([,item]) => {
+        if (!item.history) return;
+        const pts = Object.values(item.history).sort((a,b)=>a.date.localeCompare(b.date));
+        if (!pts.length) return;
+        const col = PALETTE[ci++ % PALETTE.length];
+
+        ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.lineJoin = "round";
+        ctx.beginPath();
+        pts.forEach((p,i) => i===0 ? ctx.moveTo(toX(p.date),toY(p.level)) : ctx.lineTo(toX(p.date),toY(p.level)));
+        ctx.stroke();
+
+        pts.forEach(p => {
+          ctx.beginPath(); ctx.arc(toX(p.date), toY(p.level), 4.5, 0, Math.PI*2);
+          ctx.fillStyle   = col; ctx.fill();
+          ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
+        });
+
+        const last = pts[pts.length-1];
+        ctx.fillStyle    = col;
+        ctx.font         = `600 10px Inter, sans-serif`;
+        ctx.textAlign    = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(item.label.slice(0,24), toX(last.date)+8, toY(last.level));
+      });
+    }
+
+    /* ── Firebase ──────────────────────────────────────────────── */
+    onValue(ref(db,"items"), snap => {
+      items = snap.val() || {};
+      renderChecklist();
+      renderChart();
+    });
+
+    window.addItem = () => {
+      const input = document.getElementById("new-item-input");
+      const label = input.value.trim();
+      if (!label) return;
+      push(ref(db,"items"), { label, history: {} });
+      input.value = "";
+    };
+
+    const SERVICE_COMPETENCES = [
+      // 1. Accueil et évaluation initiale
+      "1. Accueil — Scoper le patient",
+      "1. Accueil — Faire un ECG",
+      "1. Accueil — Réaliser un bilan sanguin",
+      "1. Accueil — Inventaire : retirer les objets potentiellement dangereux",
+      "1. Accueil — Inventaire : retirer les médicaments personnels",
+      "1. Accueil — Recueillir les données cliniques (antécédents, toxiques, allergies, situation sociale…)",
+      // 2. Installation et consignes
+      "2. Installation — Installer le patient avec les consignes du service",
+      "2. Installation — Consignes : ne pas se lever",
+      "2. Installation — Consignes : rester à jeun jusqu'à la venue des médecins",
+      "2. Installation — Consignes : sonnette à disposition",
+      "2. Installation — Consignes : prévenir en cas de douleurs thoraciques",
+      // 3. Surveillance et signes de gravité
+      "3. Surveillance — Repérer et transmettre les signes de gravité (HTA, troubles du rythme, douleurs thoraciques, somnolence, anurie, saignements, hématomes, dyspnée/désaturation, sueurs)",
+      // 4. Analyse et évaluation clinique
+      "4. Analyse clinique — Pathologies cardiaques (coronaropathie, valvulopathie, insuffisance cardiaque, décompensation, choc cardiogénique)",
+      "4. Analyse clinique — Pathologies pneumologiques (cancer broncho-pulmonaire, décompensation BPCO/asthme, HTAP)",
+      // 5. Gestion de la douleur
+      "5. Douleur — Évaluer à l'entrée avec une échelle adaptée",
+      "5. Douleur — Évaluer 2h après l'administration d'un antalgique",
+      "5. Douleur — Évaluer toutes les 4h",
+      "5. Douleur — Réaliser les transmissions orales et écrites",
+      // 6. Planification et priorisation des soins
+      "6. Planification — Planifier et prioriser les soins (bilans, ECG, pansements, ETT, coronarographie, IRM cardiaque, Doppler, radio au lit, ETO…)",
+      "6. Planification — Coordonner les soins",
+      "6. Planification — Réajuster le projet de soins selon le contexte et l'urgence",
+      // 7. Parcours de soins et consentement
+      "7. Parcours de soins — Connaître et expliquer le parcours des pathologies prévalentes",
+      "7. Parcours de soins — S'assurer du consentement du patient",
+      "7. Parcours de soins — Informer le patient sur le déroulement des soins",
+      // 8. Réalisation des soins
+      "8. Soins — Réaliser les soins dans le respect des procédures et protocoles",
+      "8. Soins — Repérer les situations d'urgence ou de crise et prévenir l'équipe",
+      // 9. Recueil de données et prévention des risques
+      "9. Prévention — Renseigner le score de BRADEN",
+      "9. Prévention — Évaluer le degré d'autonomie et adapter les soins",
+      "9. Prévention — Dénutrition : fiche alimentaire, appel diététicien, vérification bilan (phosphore, iono, albumine…)",
+      "9. Prévention — Escarre : tours de nursing, points de décharge, massages/effleurages, commande MAA",
+      "9. Prévention — Chute : barrières, bedexit, FEI après chute",
+      "9. Prévention — Mettre à disposition la sonnette",
+      // 10. Gestion des traitements et protocoles
+      "10. Traitements — Vérifier les prescriptions (contact pharmacien si nécessaire)",
+      "10. Traitements — Connaître les familles de traitements (AAP, anticoagulants, bétabloquants, IEC, catécholamines…)",
+      "10. Traitements — Repérer et signaler les anomalies, gérer les retours de médicaments",
+      "10. Traitements — Préparer les thérapeutiques (asepsie, règles d'administration)",
+      "10. Traitements — Utiliser le matériel (PSE, pompe à perfusion, KANGAROO, VNI, optiflow, défibrillateur…)",
+      "10. Traitements — Assister le médecin lors de gestes techniques (VVC, KTA, drain péricardique/pleural, SEES, ETO…)",
+      // 11. Éducation et accompagnement
+      "11. Éducation — Remplir la macrocible d'entrée, évaluer les risques cardio-vasculaires/pneumologiques",
+      "11. Éducation — Proposer des intervenants adaptés (tabacologue, AS, psychologue, diététicienne, kiné, associations…)",
+      "11. Éducation — Éduquer sur les bonnes pratiques (régime, arrêt du tabac…)",
+      "11. Éducation — Mettre à disposition des outils (tablette, livrets explicatifs…)",
+      // 12. Communication et relation avec le patient
+      "12. Communication — Obtenir le consentement avant chaque soin",
+      "12. Communication — Expliquer le déroulé et les objectifs des soins",
+      "12. Communication — Respecter le secret professionnel, adapter le vocabulaire et la posture",
+      "12. Communication — Réassurer, écouter et intégrer le vécu du patient dans sa prise en charge",
+      // 13. Auto-évaluation et amélioration continue
+      "13. Auto-évaluation — Anticiper les soins (carte mentale…)",
+      "13. Auto-évaluation — Réaliser une auto-évaluation après chaque soin",
+      "13. Auto-évaluation — Identifier les acquis et axes d'amélioration",
+      "13. Auto-évaluation — Participer aux formations proposées par l'équipe",
+      "13. Auto-évaluation — Se questionner sur les prises en soins non maîtrisées",
+      // 14. Travail en équipe et coordination
+      "14. Équipe — Repérer les membres de l'équipe (IDE, AS, médecins, CDS, kiné, diététicienne…)",
+      "14. Équipe — Solliciter les collaborateurs selon les informations recueillies",
+      "14. Équipe — Coordonner les soins en fonction des activités de chacun",
+      "14. Équipe — Assurer la traçabilité des soins (DxCare…)",
+      "14. Équipe — Réaliser des transmissions orales et écrites claires et pertinentes",
+      "14. Équipe — Adapter sa pratique selon le contexte de soins",
+      // 15. Encadrement et évaluation
+      "15. Encadrement — Encadrer des étudiants (IDE, AS, ambulancier, médecine, dentaire)",
+      "15. Encadrement — Se positionner en tant qu'encadrant",
+      "15. Encadrement — Fournir une évaluation objective et constructive",
+      "15. Encadrement — Veiller à la conformité des soins réalisés",
+    ];
+
+    window.importServiceCompetences = async () => {
+      if (!confirm(`Importer les ${SERVICE_COMPETENCES.length} compétences du service en cardiologie/pneumologie ?\n\nElles s'ajouteront à la liste existante.`)) return;
+      const btn = document.getElementById("btn-import");
+      btn.disabled = true;
+      btn.textContent = "Import en cours…";
+      for (const label of SERVICE_COMPETENCES) {
+        await push(ref(db,"items"), { label, history: {} });
+      }
+      btn.textContent = `✓ ${SERVICE_COMPETENCES.length} compétences importées`;
+      setTimeout(() => { btn.disabled = false; btn.textContent = "📋 Importer les compétences du service"; }, 3000);
+    };
+
+    window.addEventListener("resize", renderChart);
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --sb-bg    : #1e293b;
+      --sb-w     : 200px;
+      --sb-w-col : 54px;
+      --accent   : #6366f1;
+      --bg       : #f1f5f9;
+      --surface  : #ffffff;
+      --border   : #e2e8f0;
+      --text     : #1e293b;
+      --muted    : #64748b;
+      --radius   : 10px;
+      --ease     : .22s ease;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    /* ─── SIDEBAR ─────────────────────────────────────────── */
+    .sidebar {
+      position: fixed; inset: 0 auto 0 0;
+      width: var(--sb-w);
+      background: var(--sb-bg);
+      display: flex; flex-direction: column;
+      transition: width var(--ease);
+      z-index: 200; overflow: hidden;
+    }
+
+    .sidebar.collapsed { width: var(--sb-w-col); }
+
+    /* brand */
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      padding: 16px 14px 14px;
+      border-bottom: 1px solid #334155;
+      min-height: 62px; flex-shrink: 0;
+    }
+
+    .brand-logo {
+      width: 30px; height: 30px; flex-shrink: 0;
+      background: linear-gradient(135deg,#6366f1,#8b5cf6);
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; color: #fff; font-weight: 700; line-height: 1;
+    }
+
+    .brand-text {
+      color: #f1f5f9; font-weight: 700; font-size: 13px;
+      white-space: nowrap;
+      transition: opacity var(--ease), width var(--ease);
+    }
+
+    .sidebar.collapsed .brand-text { opacity:0; width:0; pointer-events:none; }
+
+    /* nav */
+    .sidebar nav { flex:1; padding: 10px 0; overflow-y:auto; }
+    .sidebar nav ul { list-style:none; }
+
+    .sidebar nav li a {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 14px;
+      color: #94a3b8; text-decoration: none;
+      font-size: 13px; font-weight: 500;
+      white-space: nowrap;
+      transition: color .14s, background .14s;
+    }
+
+    .sidebar nav li a:hover { color:#f1f5f9; background:#334155; }
+    .sidebar nav li a.active { color:#f1f5f9; background:#334155; }
+
+    .nav-ic {
+      width: 24px; height: 24px; border-radius: 6px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px;
+    }
+
+    .nav-label {
+      white-space: nowrap;
+      transition: opacity var(--ease);
+    }
+
+    .sidebar.collapsed .nav-label { opacity:0; pointer-events:none; }
+
+    /* toggle */
+    .toggle {
+      margin: 6px 10px 12px;
+      background: #334155; border: none; border-radius: 7px;
+      color: #94a3b8; font-size: 15px; cursor: pointer;
+      padding: 7px; width: calc(100% - 20px);
+      text-align: left; transition: color .14s;
+      flex-shrink: 0;
+    }
+
+    .toggle:hover { color: #f1f5f9; }
+
+    /* ─── MAIN ────────────────────────────────────────────── */
+    .main {
+      margin-left: var(--sb-w);
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      transition: margin-left var(--ease);
+    }
+
+    .sidebar.collapsed ~ .main { margin-left: var(--sb-w-col); }
+
+    .main-header {
+      padding: 26px 28px 18px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .main-header h1 { font-size: 1.5rem; font-weight: 700; }
+    .main-header p  { color: var(--muted); font-size: 13px; margin-top: 3px; }
+
+    .content { padding: 22px 28px; flex:1; }
+
+    /* ─── SETUP NOTE ──────────────────────────────────────── */
+    .setup-note {
+      background: #fffbeb; border: 1px solid #fcd34d;
+      border-radius: var(--radius);
+      padding: 12px 16px; font-size: 12px; color: #92400e;
+      line-height: 1.7; margin-bottom: 20px;
+    }
+
+    .setup-note strong { color: #78350f; }
+    .setup-note code {
+      background: #fef3c7; padding: 1px 5px;
+      border-radius: 3px; font-size: 11px;
+    }
+
+    .setup-note a { color: #92400e; font-weight: 600; margin-left: 8px; }
+
+    /* ─── SECTION LABEL ───────────────────────────────────── */
+    .section-label {
+      font-size: 11px; font-weight: 600;
+      letter-spacing: .08em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 8px; margin-top: 4px;
+    }
+
+    /* ─── ADD FORM ────────────────────────────────────────── */
+    .add-form {
+      display: flex; gap: 8px;
+      max-width: 580px; margin-bottom: 20px;
+    }
+
+    .add-form input {
+      flex:1; padding: 8px 13px;
+      border: 1.5px solid var(--border); border-radius: var(--radius);
+      font-family: inherit; font-size: 13px;
+      background: var(--surface); color: var(--text); outline: none;
+      transition: border-color .15s;
+    }
+
+    .add-form input:focus { border-color: var(--accent); }
+    .add-form input::placeholder { color: #b0bac4; }
+
+    .btn-primary {
+      padding: 8px 16px;
+      background: var(--accent); color: #fff;
+      border: none; border-radius: var(--radius);
+      font-family: inherit; font-size: 13px; font-weight: 600;
+      cursor: pointer; white-space: nowrap;
+      transition: background .14s, transform .1s;
+    }
+
+    .btn-primary:hover  { background: #4f46e5; }
+    .btn-primary:active { transform: scale(.97); }
+
+    /* ─── CHECKLIST ───────────────────────────────────────── */
+    #checklist-items { display: flex; flex-direction: column; gap: 6px; margin-bottom: 28px; }
+
+    .item-row {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 9px 14px;
+      display: flex; align-items: center; gap: 12px;
+      transition: box-shadow .15s;
+    }
+
+    .item-row:hover { box-shadow: 0 2px 8px rgba(0,0,0,.07); }
+
+    .item-label { flex:1; font-weight: 500; font-size: 13.5px; }
+
+    .item-controls {
+      display: flex; align-items: center; gap: 8px;
+      flex-wrap: wrap; justify-content: flex-end;
+    }
+
+    .level-select {
+      padding: 5px 8px;
+      border: 1px solid var(--border); border-radius: 6px;
+      font-family: inherit; font-size: 12px;
+      background: var(--bg); color: var(--text);
+      outline: none; cursor: pointer;
+    }
+
+    .level-pill {
+      font-size: 11px; font-weight: 600;
+      padding: 3px 10px; border-radius: 20px;
+      border: 1px solid transparent; white-space: nowrap;
+    }
+
+    .btn-del {
+      background: none; border: none;
+      color: #cbd5e1; font-size: 13px; cursor: pointer;
+      padding: 3px 7px; border-radius: 5px;
+      transition: color .14s, background .14s;
+    }
+
+    .btn-del:hover { color: #ef4444; background: #fef2f2; }
+
+    .empty-state { color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+    /* ─── CHART CARD ──────────────────────────────────────── */
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px 16px;
+      margin-bottom: 16px;
+    }
+
+    .chart-card h2 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+
+    #prog-chart {
+      display: block; width: 100%;
+      height: 340px;
+    }
+
+    /* ─── LEGEND ──────────────────────────────────────────── */
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px;
+    }
+
+    .leg-item {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11px; color: var(--muted);
+    }
+
+    .leg-dot { width: 9px; height: 9px; border-radius: 50%; }
+
+    /* ─── FOOTER ──────────────────────────────────────────── */
+    footer {
+      padding: 12px 28px;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      text-align: center;
+      color: var(--muted); font-size: 12px;
+    }
+
+    /* ─── RESPONSIVE ──────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .sidebar {
+        position: relative; width: 100% !important;
+        flex-direction: row; flex-wrap: wrap;
+        height: auto; min-height: 0;
+      }
+
+      .sidebar.collapsed { height: 50px; overflow: hidden; }
+
+      .sidebar .brand { padding: 10px 14px; border-bottom: none; flex:1; }
+      .sidebar nav {
+        order: 3; width: 100%;
+        border-top: 1px solid #334155; padding: 4px 0;
+      }
+      .sidebar nav ul { display: flex; flex-wrap: wrap; }
+      .sidebar nav li a { padding: 7px 12px; font-size: 12px; }
+      .nav-label { opacity: 1 !important; }
+      .toggle { order: 2; margin: 10px 12px; width: auto; }
+
+      .main { margin-left: 0 !important; }
+      .main-header { padding: 16px; }
+      .main-header h1 { font-size: 1.2rem; }
+      .content { padding: 14px 16px; }
+      .add-form { max-width: 100%; }
+      .level-pill { display: none; }
+      #prog-chart { height: 260px; }
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- ═══ SIDEBAR ═══════════════════════════════════════════════ -->
+<aside class="sidebar" id="sidebar">
+  <div class="brand">
+    <div class="brand-logo">✓</div>
+    <span class="brand-text">IFSI Crip 34</span>
+  </div>
+
+  <nav>
+    <ul>
+      <li>
+        <a href="#" class="active">
+          <span class="nav-ic" style="background:#6366f1">📋</span>
+          <span class="nav-label">Compétences</span>
+        </a>
+      </li>
+      <li>
+        <a href="#">
+          <span class="nav-ic" style="background:#ec4899">📈</span>
+          <span class="nav-label">Progression</span>
+        </a>
+      </li>
+    </ul>
+  </nav>
+
+  <button class="toggle" id="toggleBtn" aria-label="Toggle sidebar">☰</button>
+</aside>
+
+<!-- ═══ MAIN ═══════════════════════════════════════════════════ -->
+<main class="main">
+
+  <header class="main-header">
+    <h1>Suivi de Compétences</h1>
+    <p>Septembre 2025 → Juillet 2028 &nbsp;·&nbsp; Synchronisé en temps réel via Firebase</p>
+  </header>
+
+  <div class="content">
+
+    <div class="setup-note" id="setup-note">
+      <strong>⚙ Configuration Firebase requise</strong> —
+      Ouvre ce fichier dans un éditeur et remplace les valeurs de <code>firebaseConfig</code> (lignes 10–18)
+      par les clés de ton projet. Active <strong>Realtime Database</strong> avec
+      <code>"read": true, "write": true</code>.
+      <a href="#" onclick="document.getElementById('setup-note').style.display='none';return false">Fermer ✕</a>
+    </div>
+
+    <div class="section-label">Compétences du service</div>
+    <div style="margin-bottom:20px;">
+      <button id="btn-import" class="btn-primary" onclick="importServiceCompetences()"
+        style="background:#0ea5e9;font-size:13px;padding:9px 18px;">
+        📋 Importer les compétences du service
+      </button>
+      <p style="color:var(--muted);font-size:11.5px;margin-top:7px;line-height:1.5;">
+        Importe les <strong>60 compétences</strong> en cardiologie/pneumologie (tâches/activités réalisables dans le service).<br>
+        À n'exécuter qu'une fois — elles s'ajoutent à la liste existante.
+      </p>
+    </div>
+
+    <div class="section-label">Ajouter une compétence</div>
+    <div class="add-form">
+      <input id="new-item-input" type="text"
+             placeholder="Ex : Réaliser un soin de nursing…"
+             onkeydown="if(event.key==='Enter')addItem()" />
+      <button class="btn-primary" onclick="addItem()">+ Ajouter</button>
+    </div>
+
+    <div class="section-label">Liste des compétences</div>
+    <div id="checklist-items">
+      <p class="empty-state">Connexion à Firebase en cours…</p>
+    </div>
+
+    <div class="chart-card">
+      <h2>📈 Courbe de progression</h2>
+      <canvas id="prog-chart"></canvas>
+      <div class="legend">
+        <div class="leg-item"><span class="leg-dot" style="background:#6b7280"></span>non-mobilisé</div>
+        <div class="leg-item"><span class="leg-dot" style="background:#3b82f6"></span>observé</div>
+        <div class="leg-item"><span class="leg-dot" style="background:#10b981"></span>mobilisé 1 fois</div>
+        <div class="leg-item"><span class="leg-dot" style="background:#f59e0b"></span>mobilisé 3+ fois</div>
+        <div class="leg-item"><span class="leg-dot" style="background:#ef4444"></span>à améliorer</div>
+        <div class="leg-item"><span class="leg-dot" style="background:#7c3aed"></span>acquis</div>
+        <div class="leg-item" style="margin-left:auto">
+          <span style="display:inline-block;width:18px;height:2px;
+                background:#ef4444;border-radius:1px;margin-right:5px;vertical-align:middle"></span>
+          aujourd'hui
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+
+  <footer>Anaïs Logerais &nbsp;|&nbsp; 52ème promotion &nbsp;|&nbsp; IFSI Crip 34</footer>
+
+</main>
+
+<script>
+  const sidebar = document.getElementById("sidebar");
+  document.getElementById("toggleBtn").addEventListener("click", () => {
+    sidebar.classList.toggle("collapsed");
+  });
+</script>
+
+</body>
+</html>

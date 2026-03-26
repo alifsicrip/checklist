@@ -11,20 +11,19 @@
     import { getDatabase, ref, set, onValue, push, remove }
                                 from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-    /* ══════════════════════════════════════════════════════════════
-       ⚙  REMPLACE CES VALEURS PAR LES TIENNES
-          Console Firebase → Paramètres du projet → Vos applications → Config
-    ══════════════════════════════════════════════════════════════ */
+   
+    ══════════════════════════════════════════════════════════════ 
     const firebaseConfig = {
-      apiKey:            "VOTRE_API_KEY",
-      authDomain:        "VOTRE_PROJECT.firebaseapp.com",
-      databaseURL:       "https://VOTRE_PROJECT-default-rtdb.firebaseio.com",
-      projectId:         "VOTRE_PROJECT",
-      storageBucket:     "VOTRE_PROJECT.appspot.com",
-      messagingSenderId: "VOTRE_SENDER_ID",
-      appId:             "VOTRE_APP_ID"
+      apiKey: "AIzaSyCXxzC-d97eNu4wJMaItlO1m-l8RHiU2d0",
+      authDomain: "checklist-ifsi.firebaseapp.com",
+      databaseURL: "https://checklist-ifsi-default-rtdb.europe-west1.firebasedatabase.app",
+      projectId: "checklist-ifsi",
+      storageBucket: "checklist-ifsi.firebasestorage.app",
+      messagingSenderId: "170955625331",
+      appId: "1:170955625331:web:3bcfe50f254fea9aa2ab06"
     };
-    /* ══════════════════════════════════════════════════════════════ */
+    
+    ══════════════════════════════════════════════════════════════ 
 
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
